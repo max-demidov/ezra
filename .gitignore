@@ -8,3 +8,5 @@ node_modules/
 /playwright/.auth/
 .claude/
 .playwright/
+.env
+.env.local
