@@ -106,7 +106,6 @@ export class JoinPage {
     await this.fillFirstName(data.firstName);
     await this.fillLastName(data.lastName);
     await this.fillEmail(data.email);
-    // await this.page.waitForTimeout(5000);
     await this.clickSubmit();
   }
 
