@@ -21,5 +21,5 @@ test('get started link', async ({ page }) => {
 });
 
 test('creds', async ({ page }) => {
-  expect(process.env.API_URL).toContain("stage");
+  expect(process.env.MEMBER_A_EMAIL).toContain("max");
 });
