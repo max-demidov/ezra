@@ -23,6 +23,8 @@ jobs:
         MEMBER_A_PASSWORD: ${{ secrets.MEMBER_A_PASSWORD }}
         MEMBER_B_EMAIL: ${{ secrets.MEMBER_B_EMAIL }}
         MEMBER_B_PASSWORD: ${{ secrets.MEMBER_B_PASSWORD }}
+        KRAKOVSKY_EMAIL: ${{ secrets.KRAKOVSKY_EMAIL }}
+        KRAKOVSKY_PASSWORD: ${{ secrets.KRAKOVSKY_PASSWORD }}
       run: npx playwright test
     - uses: actions/upload-artifact@v4
       if: ${{ !cancelled() }}
