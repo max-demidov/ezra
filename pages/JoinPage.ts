@@ -1,4 +1,5 @@
 import { type Page, type Locator, expect } from '@playwright/test';
+import { randomUUID } from 'crypto';
 
 /**
  * Page Object Model for the Ezra member registration page.
@@ -26,7 +27,7 @@ export class JoinPage {
     this.emailInput = page.getByRole('textbox', { name: 'Email' });
     this.phoneInput = page.getByRole('textbox', { name: 'Phone Number' });
     this.passwordInput = page.getByRole('textbox', { name: 'Password' })
-    this.termsCheckbox = page.getByRole('button', { name: 'I agree to Ezra\'s terms of' });
+    this.termsCheckbox = page.getByRole('button', { name: 'I agree to Ezra\'s terms of' }).locator('svg');
     this.submitButton = page.getByRole('button', { name: 'Submit' });
     this.signInLink = page.getByRole('link', { name: 'SignIn' });
   }
@@ -35,6 +36,14 @@ export class JoinPage {
   async goto() {
     await this.page.goto(this.url);
     await this.waitForPageLoad();
+  }
+
+  /** Accept cookies if the banner is present. */
+  async acceptCookiesIfPresent() {
+    const acceptButton = this.page.getByRole('button', { name: 'Accept' });
+    if (await acceptButton.isVisible()) {
+      await acceptButton.click();
+    }
   }
 
   /**
@@ -136,9 +145,10 @@ export class JoinPage {
    * Generate a unique test password.
    *
    * Usage:  const password = JoinPage.uniquePassword('member_a');
-   *         // → member_a+1714000000000
+   *         // → member_af896f840
    */
   static uniquePassword(prefix = ''): string {
-    return `${prefix}+${Date.now()}`;
+    return `${prefix}${randomUUID().slice(0, 10)}`;
   }
+
 }
