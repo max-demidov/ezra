@@ -1,8 +1,8 @@
-import { test, expect, request, type Page } from '@playwright/test';
-import { JoinPage }        from '../../pages/JoinPage';
-import { SelectPlanPage }  from '../../pages/SelectPlanPage';
-import { PaymentPage }     from '../../pages/PaymentPage';
-import { EzraApiClient }   from '../../api/EzraApiClient';
+import { test, expect, type Page } from '@playwright/test';
+import { JoinPage }        from '../pages/JoinPage';
+import { SelectPlanPage }  from '../pages/SelectPlanPage';
+import { PaymentPage }     from '../pages/PaymentPage';
+import { EzraApiClient }   from '../api/EzraApiClient';
 
 /**
  * End-to-end happy path: new member registers → selects a scan plan →
@@ -66,26 +66,19 @@ test.describe.serial('Happy Path: Successful payment with valid credit card', ()
   test('Select a plan and slot', async () => {
     await selectPlanPage.expectSelectScanHeadingVisible();
 
-    // Select the MRI Scan card, capture its price, fill member details, advance.
     price = await selectPlanPage.selectPlan('MRI Scan', '12-31-1999', 'Male');
     expect(price).toBeGreaterThan(0);
 
-    // On the scheduling view, pick the recommended filter, last day, first slot.
     await selectPlanPage.scheduleAppointment();
-
     await selectPlanPage.expectReserveHeadingVisible();
   });
 
   // ── Step 3: Payment ─────────────────────────────────────────────────────────
 
   test('Complete payment with Stripe test card', async () => {
-    // Price on the payment screen must match what was shown on the plan card.
     await paymentPage.expectPriceDisplayed(price);
-
-    // Fill Stripe fields and submit (defaults to the Stripe universal test card).
     await paymentPage.pay();
 
-    // Confirmation screen assertions.
     await paymentPage.waitForConfirmation();
     await paymentPage.expectConfirmationHeadingVisible(MEMBER.firstName);
     await paymentPage.expectBeginQuestionnaireButtonVisible();
@@ -93,23 +86,28 @@ test.describe.serial('Happy Path: Successful payment with valid credit card', ()
   });
 
   // ── Step 4: Back-end verification ───────────────────────────────────────────
- 
-  // Skipping this step for now since the booking verification is currently slow,
-  // likely due to delays in the booking creation process.
-  // The test passes with a sufficient timeout. Feel free to re-enable but be
-  // ready to increase the timeout up to 10 minutes.
+
   test('Verify the booking is created in the system and available in User Facing Portal', async () => {
     test.slow();
     test.setTimeout(300_000);
+    // Skipping this test for now since the booking verification is currently slow,
+    // likely due to delays in the booking creation process.
+    // The test passes with a sufficient timeout. Feel free to re-enable but be
+    // ready to increase the timeout up to 10 minutes.
     test.skip();
- 
-    await apiClient.authenticateAsAdmin();
- 
+
+    await apiClient.authenticate({
+      username: process.env.KRAKOVSKY_EMAIL!,
+      password: process.env.KRAKOVSKY_PASSWORD!,
+      clientId: EzraApiClient.ADMIN_CLIENT_ID,
+      endpoint: EzraApiClient.USER_AUTH_ENDPOINT,
+    });
+
     const booking = await apiClient.waitForBooking(MEMBER.email, {
       timeout:   300_000,
       intervals: [10_000, 20_000, 30_000],
     });
- 
+
     apiClient.assertBookingMatchesMember(booking, {
       email:    MEMBER.email,
       scanType: 'MRI Scan',

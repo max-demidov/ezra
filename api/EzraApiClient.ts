@@ -5,7 +5,20 @@ import { type APIRequestContext, expect, request } from '@playwright/test';
 export interface Booking {
   member: { email: string };
   type:   string;
-  [key: string]: unknown;  // allow access to other fields without breaking type checks
+  [key: string]: unknown; // allow access to other fields without breaking type checks
+}
+
+/**
+ * Parameters for the `authenticate()` method.
+ * All fields are required — callers decide which endpoint and credentials
+ * to use, keeping the method free of assumptions about caller identity.
+ */
+export interface AuthParams {
+  username:  string;
+  password:  string;
+  clientId:  string;
+  /** Use `EzraApiClient.USER_AUTH_ENDPOINT` or `EzraApiClient.MEMBER_AUTH_ENDPOINT`. */
+  endpoint:  string;
 }
 
 // ── Client ────────────────────────────────────────────────────────────────────
@@ -18,11 +31,24 @@ export interface Booking {
  * Tests import this class and call named methods; they never construct raw
  * fetch / APIRequestContext calls themselves.
  *
- * Usage:
+ * Usage (admin):
  *   const api = await EzraApiClient.create();
- *   await api.authenticateAsAdmin();
+ *   await api.authenticate({
+ *     username: process.env.ADMIN_EMAIL!,
+ *     password: process.env.ADMIN_PASSWORD!,
+ *     clientId: EzraApiClient.ADMIN_CLIENT_ID,
+ *     endpoint: EzraApiClient.USER_AUTH_ENDPOINT,
+ *   });
  *   const booking = await api.waitForBooking(memberEmail);
  *   await api.dispose();
+ *
+ * Usage (member):
+ *   await api.authenticate({
+ *     username: process.env.MEMBER_EMAIL!,
+ *     password: process.env.MEMBER_PASSWORD!,
+ *     clientId: EzraApiClient.MEMBER_CLIENT_ID,
+ *     endpoint: EzraApiClient.MEMBER_AUTH_ENDPOINT,
+ *   });
  */
 export class EzraApiClient {
   private readonly context: APIRequestContext;
@@ -30,10 +56,18 @@ export class EzraApiClient {
 
   static readonly BASE_URL = 'https://stage-api.ezra.com';
 
-  // Keep auth constants here so a credential change is a one-line edit.
-  private static readonly AUTH_ENDPOINT  = '/individuals/user/connect/token';
-  private static readonly AUTH_CLIENT_ID = '356575C0-6E1F-47EB-AB14-23705D8C5BFE';
-  private static readonly AUTH_SCOPE     = 'openid offline_access profile roles email';
+  // ── Auth endpoint constants ───────────────────────────────────────────────────
+  /** OAuth token endpoint for admin / portal users. */
+  static readonly USER_AUTH_ENDPOINT   = '/individuals/user/connect/token';
+  /** OAuth token endpoint for member-facing clients. */
+  static readonly MEMBER_AUTH_ENDPOINT = '/individuals/member/connect/token';
+
+  // ── Client ID constants ───────────────────────────────────────────────────────
+  static readonly ADMIN_CLIENT_ID  = '356575C0-6E1F-47EB-AB14-23705D8C5BFE';
+  /** Replace with the actual member-facing client ID if it differs. */
+  static readonly MEMBER_CLIENT_ID = 'F59A84B4-6E6B-4678-97A0-11C0F6E0719F';
+
+  private static readonly AUTH_SCOPE        = 'openid offline_access profile roles email';
   private static readonly BOOKINGS_ENDPOINT = '/packages/odata/appointments';
 
   private constructor(context: APIRequestContext) {
@@ -59,14 +93,40 @@ export class EzraApiClient {
   // ── Auth ──────────────────────────────────────────────────────────────────────
 
   /**
-   * Authenticate with the User Facing Portal and store the access token
+   * Authenticate against the given token endpoint and store the access token
    * for use in subsequent requests.
    *
-   * Credentials are read from environment variables — never hardcoded.
-   * Set KRAKOVSKY_EMAIL and KRAKOVSKY_PASSWORD in your .env file.
+   * The method is intentionally free of hardcoded credentials or endpoint
+   * assumptions — the caller controls all four parameters, making it usable
+   * for both admin (user) and member auth flows.
+   *
+   * @param params.username - The account email / username
+   * @param params.password - The account password
+   * @param params.clientId - The OAuth client_id for this application type
+   * @param params.endpoint - Token endpoint path:
+   *                          `EzraApiClient.USER_AUTH_ENDPOINT`   for admin/portal
+   *                          `EzraApiClient.MEMBER_AUTH_ENDPOINT` for member-facing
+   *
+   * @example
+   * // Admin authentication
+   * await api.authenticate({
+   *   username: process.env.ADMIN_EMAIL!,
+   *   password: process.env.ADMIN_PASSWORD!,
+   *   clientId: EzraApiClient.ADMIN_CLIENT_ID,
+   *   endpoint: EzraApiClient.USER_AUTH_ENDPOINT,
+   * });
+   *
+   * @example
+   * // Member authentication
+   * await api.authenticate({
+   *   username: process.env.MEMBER_EMAIL!,
+   *   password: process.env.MEMBER_PASSWORD!,
+   *   clientId: EzraApiClient.MEMBER_CLIENT_ID,
+   *   endpoint: EzraApiClient.MEMBER_AUTH_ENDPOINT,
+   * });
    */
-  async authenticateAsAdmin(): Promise<void> {
-    const response = await this.context.post(EzraApiClient.AUTH_ENDPOINT, {
+  async authenticate({ username, password, clientId, endpoint }: AuthParams): Promise<void> {
+    const response = await this.context.post(endpoint, {
       headers: {
         'Accept':       '*/*',
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -74,13 +134,13 @@ export class EzraApiClient {
       form: {
         grant_type: 'password',
         scope:      EzraApiClient.AUTH_SCOPE,
-        username:   process.env.KRAKOVSKY_EMAIL!,
-        password:   process.env.KRAKOVSKY_PASSWORD!,
-        client_id:  EzraApiClient.AUTH_CLIENT_ID,
+        username,
+        password,
+        client_id:  clientId,
       },
     });
 
-    expect(response.ok(), `Auth request failed: ${response.status()}`).toBeTruthy();
+    expect(response.ok(), `Auth request failed: ${response.status()} ${endpoint}`).toBeTruthy();
 
     const body = await response.json();
     this.accessToken = body.access_token;
@@ -158,12 +218,46 @@ export class EzraApiClient {
     expect(booking.type).toBe(expected.scanType);
   }
 
+  async getSubmissionDetails(encounterId: string): Promise<any> {
+    const response = await this.context.get(`/diagnostics/api/medicaldata/forms/mq/submissions/${encounterId}/detail`, {
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        Accept:        '*/*',
+      }
+    });
+
+    expect(response.ok(), `Request failed: ${response.status()}`).toBeTruthy();
+
+    return await response.json();
+  }
+
+  async postSubmissionData(submissionId: string,  data: any ): Promise<any> {
+    console.log(`Posting submission data: ${JSON.stringify(data)}`);
+    return await this.context.post(`/diagnostics/api/medicaldata/forms/mq/submissions/${submissionId}/data`, {
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        Accept:        '*/*',
+        'Content-Type':'application/json',
+      },
+      data: data,
+    });
+  }
+
+  async getSubmissionData(submissionId: string): Promise<any> {
+    return await this.context.get(`/diagnostics/api/medicaldata/forms/mq/submissions/${submissionId}/data`, {
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        Accept:        '*/*',
+      }
+    });
+  }
+
   // ── Private helpers ───────────────────────────────────────────────────────────
 
   private assertAuthenticated(): void {
     if (!this.accessToken) {
       throw new Error(
-        'EzraApiClient: no access token — call authenticateAsAdmin() before making authenticated requests.',
+        'EzraApiClient: no access token — call authenticate() before making authenticated requests.',
       );
     }
   }
