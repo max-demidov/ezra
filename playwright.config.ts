@@ -42,8 +42,16 @@ export default defineConfig({
   /* Configure projects for major browsers */
   projects: [
     {
-      name: 'chromium',
+      name: 'UI Tests - Desktop Chrome',
+      testDir: './tests/ui', // Only run tests in the UI folder
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'API Tests',
+      testDir: './tests/api', // Only run tests in the API folder
+      use: {
+        baseURL: 'https://stage-api.ezra.com',
+      },
     },
 
     // {
