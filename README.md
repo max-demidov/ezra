@@ -73,8 +73,8 @@ All credentials are stored in a local `.env` file that is **never committed to s
 npx playwright test
 
 # Run a specific test file
-npx playwright test tests/ui/BookingHappyPath.spec.ts
-npx playwright test tests/api/CrossMemberDataAccessPrevention.spec.ts
+npx playwright test tests/BookingHappyPath.spec.ts
+npx playwright test tests/CrossMemberDataAccessPrevention.spec.ts
 
 # Run with a visible browser window (useful for debugging)
 npx playwright test --headed
@@ -95,17 +95,15 @@ npx playwright show-report
 ```
 ezra/
 ├── api/
-│   └── EzraApiClient.ts        # API client — all back-end HTTP calls live here
+│   └── EzraApiClient.ts                         # API client — all back-end HTTP calls live here
 ├── pages/
-│   ├── JoinPage.ts              # /join — member registration
-│   ├── SelectPlanPage.ts        # Scan selection + slot scheduling
-│   └── PaymentPage.ts           # Stripe payment + confirmation screen
+│   ├── JoinPage.ts                              # /join — member registration
+│   ├── SelectPlanPage.ts                        # Scan selection + slot scheduling
+│   └── PaymentPage.ts                           # Stripe payment + confirmation screen
 ├── tests/
-│   ├── ui/
-│   │   └── BookingHappyPath.spec.ts       # E2E: register → book → pay → confirm
-│   └── api/
-│       └── CrossMemberDataAccessPrevention.spec.ts  # API: IDOR prevention
-├── .env.example                 # Template — copy to .env and fill in values
+│   ├── BookingHappyPath.spec.ts                 # E2E: register → book → pay → confirm
+│   └── CrossMemberDataAccessPrevention.spec.ts  # API: IDOR prevention
+├── .env.example                                 # Template — copy to .env and fill in values
 ├── .gitignore
 ├── package.json
 ├── playwright.config.ts
@@ -180,7 +178,7 @@ The current architecture scales in three directions without structural changes:
 
 **New API resources** — add methods to `EzraApiClient` under a new section comment. The typed interface pattern (`SubmissionAnswer`, `Booking`) should be extended — new resource shapes get their own exported interfaces at the top of the file.
 
-**New test suites** — add a file to `tests/ui/` or `tests/api/`. The config picks up all files under `tests/` automatically. Shared state between suites (e.g., a pre-authenticated session) can be managed with Playwright's [global setup](https://playwright.dev/docs/test-global-setup-teardown) once the number of suites makes per-suite auth overhead significant.
+**New test suites** — add a file to `tests/`. The config picks up all files automatically. Shared state between suites (e.g., a pre-authenticated session) can be managed with Playwright's [global setup](https://playwright.dev/docs/test-global-setup-teardown) once the number of suites makes per-suite auth overhead significant.
 
 The main scaling constraint today is the single-worker CI configuration (`workers: 1` on CI). This is appropriate for serial E2E tests that share staging state, but independent test suites (e.g., pure API tests with no UI) can safely run in parallel and should be separated into a parallel project in `playwright.config.ts` as the suite grows.
 
