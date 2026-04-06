@@ -1,4 +1,4 @@
-import { type APIRequestContext, expect, request } from '@playwright/test';
+import { type APIRequestContext, type APIResponse, expect, request } from '@playwright/test';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -14,11 +14,30 @@ export interface Booking {
  * to use, keeping the method free of assumptions about caller identity.
  */
 export interface AuthParams {
-  username:  string;
-  password:  string;
-  clientId:  string;
+  username: string;
+  password: string;
+  clientId: string;
   /** Use `EzraApiClient.USER_AUTH_ENDPOINT` or `EzraApiClient.MEMBER_AUTH_ENDPOINT`. */
-  endpoint:  string;
+  endpoint: string;
+}
+
+/** A single answer entry in a Medical Questionnaire submission. */
+export interface SubmissionAnswer {
+  key:       string;
+  value:     string;
+  hasAnswer: boolean;
+}
+
+/** Shape of a single MQ submission record returned by getSubmissionDetails(). */
+export interface MqSubmission {
+  id:     string;
+  [key: string]: unknown;
+}
+
+/** Shape of the response body returned by getSubmissionDetails(). */
+export interface SubmissionDetails {
+  mqSubmissions: MqSubmission[];
+  [key: string]: unknown;
 }
 
 // ── Client ────────────────────────────────────────────────────────────────────
@@ -64,11 +83,13 @@ export class EzraApiClient {
 
   // ── Client ID constants ───────────────────────────────────────────────────────
   static readonly ADMIN_CLIENT_ID  = '356575C0-6E1F-47EB-AB14-23705D8C5BFE';
-  /** Replace with the actual member-facing client ID if it differs. */
   static readonly MEMBER_CLIENT_ID = 'F59A84B4-6E6B-4678-97A0-11C0F6E0719F';
 
-  private static readonly AUTH_SCOPE        = 'openid offline_access profile roles email';
-  private static readonly BOOKINGS_ENDPOINT = '/packages/odata/appointments';
+  private static readonly AUTH_SCOPE = 'openid offline_access profile roles email';
+
+  // ── Resource endpoint constants ───────────────────────────────────────────────
+  private static readonly BOOKINGS_ENDPOINT    = '/packages/odata/appointments';
+  private static readonly MQ_SUBMISSIONS_BASE  = '/diagnostics/api/medicaldata/forms/mq/submissions';
 
   private constructor(context: APIRequestContext) {
     this.context = context;
@@ -202,6 +223,80 @@ export class EzraApiClient {
     return booking!;
   }
 
+  // ── Medical Questionnaire ─────────────────────────────────────────────────────
+
+  /**
+   * Retrieve the full submission details for an encounter, including the list
+   * of MQ submission records and their IDs.
+   *
+   * @param encounterId - The encounter ID to look up
+   */
+  async getSubmissionDetails(encounterId: string): Promise<SubmissionDetails> {
+    this.assertAuthenticated();
+
+    const response = await this.context.get(
+      `${EzraApiClient.MQ_SUBMISSIONS_BASE}/${encounterId}/detail`,
+      {
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          Accept:        '*/*',
+        },
+      },
+    );
+
+    expect(response.ok(), `getSubmissionDetails failed: ${response.status()}`).toBeTruthy();
+
+    return response.json() as Promise<SubmissionDetails>;
+  }
+
+  /**
+   * Write a single answer to a Medical Questionnaire submission.
+   * Returns the raw APIResponse so the caller can assert on the status code —
+   * this is intentional for negative-path tests that expect 403.
+   *
+   * @param submissionId - The submission ID to write to
+   * @param answer       - The answer payload to post
+   */
+  async postSubmissionData(
+    submissionId: string,
+    answer: SubmissionAnswer,
+  ): Promise<APIResponse> {
+    this.assertAuthenticated();
+
+    return this.context.post(
+      `${EzraApiClient.MQ_SUBMISSIONS_BASE}/${submissionId}/data`,
+      {
+        headers: {
+          Authorization:  `Bearer ${this.accessToken}`,
+          Accept:         '*/*',
+          'Content-Type': 'application/json',
+        },
+        data: answer,
+      },
+    );
+  }
+
+  /**
+   * Read all answers from a Medical Questionnaire submission.
+   * Returns the raw APIResponse so the caller can assert on the status code —
+   * this is intentional for negative-path tests that expect 403.
+   *
+   * @param submissionId - The submission ID to read from
+   */
+  async getSubmissionData(submissionId: string): Promise<APIResponse> {
+    this.assertAuthenticated();
+
+    return this.context.get(
+      `${EzraApiClient.MQ_SUBMISSIONS_BASE}/${submissionId}/data`,
+      {
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          Accept:        '*/*',
+        },
+      },
+    );
+  }
+
   // ── Assertions ────────────────────────────────────────────────────────────────
 
   /**
@@ -216,40 +311,6 @@ export class EzraApiClient {
     expect(booking).toBeDefined();
     expect(booking.member.email).toBe(expected.email);
     expect(booking.type).toBe(expected.scanType);
-  }
-
-  async getSubmissionDetails(encounterId: string): Promise<any> {
-    const response = await this.context.get(`/diagnostics/api/medicaldata/forms/mq/submissions/${encounterId}/detail`, {
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        Accept:        '*/*',
-      }
-    });
-
-    expect(response.ok(), `Request failed: ${response.status()}`).toBeTruthy();
-
-    return await response.json();
-  }
-
-  async postSubmissionData(submissionId: string,  data: any ): Promise<any> {
-    console.log(`Posting submission data: ${JSON.stringify(data)}`);
-    return await this.context.post(`/diagnostics/api/medicaldata/forms/mq/submissions/${submissionId}/data`, {
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        Accept:        '*/*',
-        'Content-Type':'application/json',
-      },
-      data: data,
-    });
-  }
-
-  async getSubmissionData(submissionId: string): Promise<any> {
-    return await this.context.get(`/diagnostics/api/medicaldata/forms/mq/submissions/${submissionId}/data`, {
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        Accept:        '*/*',
-      }
-    });
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────────

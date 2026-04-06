@@ -1,23 +1,39 @@
 import { test, expect } from '@playwright/test';
-import { EzraApiClient }   from '../api/EzraApiClient';
+import { EzraApiClient, type SubmissionAnswer } from '../api/EzraApiClient';
 
 /**
- * Member A is a legitimate owner of the Medical Questionnaire.
- * Member B is an attacker who tries to access Member A's Medical Questionnaire.
+ * Integration test: Cross-Member Medical Data Access Prevention
+ *
+ * Member A — legitimate owner of the Medical Questionnaire.
+ * Member B — attacker attempting to read and mutate Member A's data
+ *            using their own valid session token (IDOR / BOLA attack).
+ *
+ * The three serial steps verify:
+ *   1. Member A can read and write their own questionnaire data.
+ *   2. Member B is blocked (403) from reading or writing Member A's data.
+ *   3. Member A's data is unchanged after Member B's failed attempts.
  */
 test.describe.serial('Cross-Member Medical Data Access Prevention', () => {
-  const memberAencounterId : string = 'f5a738eb-ac55-47cd-86ae-c1c18c12e91b';
-  const memberBencounterId : string = 'd89e68c0-e1bb-4e4e-86cd-908707e6559e';
 
-  let apiClientA:      EzraApiClient;
-  let apiClientB:      EzraApiClient;
+  // ── Test fixtures ───────────────────────────────────────────────────────────
+  // Encounter IDs are stable staging fixtures — each belongs to a dedicated
+  // test account. Member B's encounter ID is declared for completeness even
+  // though the attack uses Member A's submission ID directly.
+  const MEMBER_A_ENCOUNTER_ID = 'f5a738eb-ac55-47cd-86ae-c1c18c12e91b';
 
-  let submissionIdA:  string = '3565';
-  let newAddress:     string;
+  let apiClientA: EzraApiClient;
+  let apiClientB: EzraApiClient;
+
+  // submissionIdA is resolved in Step 1 and shared with Steps 2 and 3.
+  // It has no default — if Step 1 fails to populate it, Steps 2 and 3 skip.
+  let submissionIdA: string;
+
+  // newAddress is set in Step 1 and used in Step 3 to verify data integrity.
+  let newAddress: string;
 
   test.beforeAll(async () => {
-    apiClientA      = await EzraApiClient.create();
-    apiClientB      = await EzraApiClient.create();
+    apiClientA = await EzraApiClient.create();
+    apiClientB = await EzraApiClient.create();
   });
 
   test.afterAll(async () => {
@@ -25,37 +41,41 @@ test.describe.serial('Cross-Member Medical Data Access Prevention', () => {
     await apiClientB.dispose();
   });
 
-  // ── Step 1: Verify Member A's authentication and legitimate data access ────────────────────────────────────────────────────
+  // ── Step 1: Member A — authenticate, read, and update their questionnaire ───
 
-  test('Member A authenticates, retrieves their submission id, accesses their questionare data, and changes it', async () => {
+  test('Member A authenticates, retrieves their submission ID, and updates their questionnaire data', async () => {
     await apiClientA.authenticate({
       username: process.env.MEMBER_A_EMAIL!,
       password: process.env.MEMBER_A_PASSWORD!,
       clientId: EzraApiClient.MEMBER_CLIENT_ID,
       endpoint: EzraApiClient.MEMBER_AUTH_ENDPOINT,
     });
-    const submissionDetails = await apiClientA.getSubmissionDetails(memberAencounterId);
-    submissionIdA = submissionDetails.mqSubmissions[0].id!;
-    expect(submissionIdA).toBeTruthy();
 
-    // Simulate legitimate update to the questionnaire (e.g. member updates their own info)
+    // Resolve Member A's submission ID from their encounter.
+    const submissionDetails = await apiClientA.getSubmissionDetails(MEMBER_A_ENCOUNTER_ID);
+    submissionIdA = submissionDetails.mqSubmissions[0].id;
+    expect(submissionIdA, 'Submission ID must be present before proceeding').toBeTruthy();
+
+    // Write a randomised address so Step 3 has an unambiguous value to verify.
     newAddress = `${Math.floor(Math.random() * 1000)} Main St`;
-    const submissionUpdateResponse = await apiClientA.postSubmissionData(submissionIdA, 
-      { key: 'address', value: newAddress, "hasAnswer": true }
-    );    
-    expect(submissionUpdateResponse.ok(), `Request failed: ${submissionUpdateResponse.status()}`).toBeTruthy();
+    const updatePayload: SubmissionAnswer = { key: 'address', value: newAddress, hasAnswer: true };
 
-    // Simulate legitimate access to the questionnaire (e.g. member reads their own info)
-    const submissionDataResponse = await apiClientA.getSubmissionData(submissionIdA);  
-    expect(submissionDataResponse.ok(), `Request failed: ${submissionDataResponse.status()}`).toBeTruthy();
-    const address = (await submissionDataResponse.json()).find((s: any) => s.key === 'address');
-    expect(address).toBeTruthy();
-    expect(address.value).toBe(newAddress);
+    const updateResponse = await apiClientA.postSubmissionData(submissionIdA, updatePayload);
+    expect(updateResponse.ok(), `POST submission data failed: ${updateResponse.status()}`).toBeTruthy();
+
+    // Read back and confirm the value was persisted correctly.
+    const readResponse = await apiClientA.getSubmissionData(submissionIdA);
+    expect(readResponse.ok(), `GET submission data failed: ${readResponse.status()}`).toBeTruthy();
+
+    const answers: SubmissionAnswer[] = await readResponse.json();
+    const addressAnswer = answers.find(a => a.key === 'address');
+    expect(addressAnswer, 'Address answer must be present in the response').toBeTruthy();
+    expect(addressAnswer!.value).toBe(newAddress);
   });
 
-  // ── Step 2: Attack Member A's questionnaire with Member B's own valid session token
+  // ── Step 2: Member B — IDOR attack using Member A's submission ID ────────────
 
-  test('Prevention from API requests to Member A\'s questionnaire with Member B\'s own valid session token', async () => {
+  test("Member B is blocked from reading or mutating Member A's questionnaire with their own valid session token", async () => {
     await apiClientB.authenticate({
       username: process.env.MEMBER_B_EMAIL!,
       password: process.env.MEMBER_B_PASSWORD!,
@@ -63,27 +83,28 @@ test.describe.serial('Cross-Member Medical Data Access Prevention', () => {
       endpoint: EzraApiClient.MEMBER_AUTH_ENDPOINT,
     });
 
-    // Malicious or curious member B attempting to mutate Member A's questionnaire data using Member A's submission ID
-    const submissionUpdateResponse = await apiClientB.postSubmissionData(submissionIdA, 
-      { key: 'address', value: "77 El Camino", "hasAnswer": true }
-    );
-    expect(submissionUpdateResponse.ok(), `Request failed: ${submissionUpdateResponse.status()}`).toBeFalsy();
-    expect(submissionUpdateResponse.status()).toBe(403); // Expecting Forbidden or similar error status
+    // Attack 1: Member B attempts to overwrite Member A's answer.
+    const attackPayload: SubmissionAnswer = { key: 'address', value: '77 El Camino', hasAnswer: true };
+    const writeResponse = await apiClientB.postSubmissionData(submissionIdA, attackPayload);
+    expect(writeResponse.ok(), 'Member B write should be rejected').toBeFalsy();
+    expect(writeResponse.status()).toBe(403);
 
-    // Malicious or curious member B attempting to access Member A's questionnaire data using Member A's submission ID
-    const submissionDataResponse = await apiClientB.getSubmissionData(submissionIdA);
-    expect(submissionDataResponse.ok(), `Request failed: ${submissionDataResponse.status()}`).toBeFalsy();
-    expect(submissionDataResponse.status()).toBe(403); // Expecting Forbidden or similar error status
+    // Attack 2: Member B attempts to read Member A's questionnaire answers.
+    const readResponse = await apiClientB.getSubmissionData(submissionIdA);
+    expect(readResponse.ok(), 'Member B read should be rejected').toBeFalsy();
+    expect(readResponse.status()).toBe(403);
   });
 
-  // ── Step 3: Verify that Member A's data remains unchanged after Member B's unauthorized attempts
+  // ── Step 3: Verify Member A's data is intact after the attack ───────────────
 
-  test('Verify that Member A\'s data remains unchanged after Member B\'s unauthorized attempts', async () => {
-    const submissionDataResponseA = await apiClientA.getSubmissionData(submissionIdA);
-    expect(submissionDataResponseA.ok(), `Request failed: ${submissionDataResponseA.status()}`).toBeTruthy();
-    const address = (await submissionDataResponseA.json()).find((s: any) => s.key === 'address');
-    expect(address).toBeTruthy();
-    expect(address.value).toBe(newAddress);
+  test("Member A's questionnaire data is unchanged after Member B's unauthorised attempts", async () => {
+    const readResponse = await apiClientA.getSubmissionData(submissionIdA);
+    expect(readResponse.ok(), `GET submission data failed: ${readResponse.status()}`).toBeTruthy();
+
+    const answers: SubmissionAnswer[] = await readResponse.json();
+    const addressAnswer = answers.find(a => a.key === 'address');
+    expect(addressAnswer, 'Address answer must still be present').toBeTruthy();
+    expect(addressAnswer!.value).toBe(newAddress);
   });
 
 });
